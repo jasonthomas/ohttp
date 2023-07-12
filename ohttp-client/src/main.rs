@@ -172,20 +172,4 @@ async fn main() -> Res<()> {
     //     response.write_http(&mut output)?;
     // }
     // Ok(())
-
-    // println!("Response: {}", hex::encode(&enc_response));
-    // let response_buf = ohttp_response.decapsulate(&enc_response)?;
-    // let response = Message::read_bhttp(&mut std::io::Cursor::new(&response_buf[..]))?;
-
-    // let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
-    //     Box::new(File::open(outfile)?)
-    // } else {
-    //     Box::new(std::io::stdout())
-    // };
-    // if args.binary {
-    //     response.write_bhttp(args.mode(), &mut output)?;
-    // } else {
-    //     response.write_http(&mut output)?;
-    // }
-    // Ok(())
 }
