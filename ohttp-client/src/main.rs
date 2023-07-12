@@ -8,6 +8,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
+use futures::{stream, StreamExt};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -28,6 +29,7 @@ impl Deref for HexArg {
 }
 
 #[derive(Debug, StructOpt)]
+#[allow(dead_code)]
 #[structopt(name = "ohttp-client", about = "Make an oblivious HTTP request.")]
 struct Args {
     /// The URL of an oblivious proxy resource.
@@ -55,22 +57,20 @@ struct Args {
     #[structopt(long, short = "n")]
     indefinite: bool,
 
+    /// Concurrency
+    #[structopt(long, short = "c")]
+    concurrency: usize,
+
+    /// Requests
+    #[structopt(long, short = "r")]
+    requests: usize,
+
     /// Enable override for the trust store.
     #[structopt(long)]
     trust: Option<PathBuf>,
 }
 
-impl Args {
-    fn mode(&self) -> Mode {
-        if self.indefinite {
-            Mode::IndefiniteLength
-        } else {
-            Mode::KnownLength
-        }
-    }
-}
-
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> Res<()> {
     let args = Args::from_args();
     ::ohttp::init();
@@ -94,11 +94,15 @@ async fn main() -> Res<()> {
         }
     };
 
-    let mut request_buf = Vec::new();
-    request.write_bhttp(Mode::KnownLength, &mut request_buf)?;
-    let ohttp_request = ohttp::ClientRequest::new(&args.config)?;
-    let (enc_request, ohttp_response) = ohttp_request.encapsulate(&request_buf)?;
-    println!("Request: {}", hex::encode(&enc_request));
+    let concurrent_requests:usize = args.concurrency;
+    let total_requests:usize = args.requests;
+    let urls = vec![&args.url; total_requests];
+
+    // let mut request_buf = Vec::new();
+    // request.write_bhttp(Mode::KnownLength, &mut request_buf)?;
+    // let ohttp_request = ohttp::ClientRequest::new(&args.config)?;
+    // let (enc_request, _ohttp_response) = ohttp_request.encapsulate(&request_buf)?;
+    // println!("Request: {}", hex::encode(&enc_request));
 
     let client = match &args.trust {
         Some(pem) => {
@@ -112,28 +116,76 @@ async fn main() -> Res<()> {
         None => reqwest::ClientBuilder::new().build()?,
     };
 
-    let enc_response = client
-        .post(&args.url)
-        .header("content-type", "message/ohttp-req")
-        .body(enc_request)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    println!("Response: {}", hex::encode(&enc_response));
-    let response_buf = ohttp_response.decapsulate(&enc_response)?;
-    let response = Message::read_bhttp(&mut std::io::Cursor::new(&response_buf[..]))?;
+    let bodies = stream::iter(urls)
+        .map(|url| {
+            let client = &client;
+            let mut request_buf = Vec::new();
+            request.write_bhttp(Mode::KnownLength, &mut request_buf).expect("YAY");
+            let ohttp_request = ohttp::ClientRequest::new(&args.config);
+            let Ok((enc_request, _ohttp_response)) = ohttp_request.expect("REASON").encapsulate(&request_buf)  else { todo!() };
+            println!("Request: {}", hex::encode(&enc_request));
+            async move {
+                let resp = client
+                    .post(url)
+                    .header("content-type", "message/ohttp-req")
+                    .body(enc_request)
+                    .send()
+                    .await?;
 
-    let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
-        Box::new(File::open(outfile)?)
-    } else {
-        Box::new(std::io::stdout())
-    };
-    if args.binary {
-        response.write_bhttp(args.mode(), &mut output)?;
-    } else {
-        response.write_http(&mut output)?;
-    }
-    Ok(())
+                resp.bytes().await
+            }
+        })
+        .buffer_unordered(concurrent_requests);
+
+
+    // let enc_response = client
+    //     .post(&args.url)
+    //     .header("content-type", "message/ohttp-req")
+    //     .body(enc_request)
+    //     .send()
+    //     .await?
+    //     .error_for_status()?
+    //     .bytes()
+    //     .await?;
+
+    bodies
+        .for_each(|b| async {
+            match b {
+                Ok(b) => println!("Got {} bytes", b.len()),
+                Err(e) => eprintln!("Got an error: {}", e),
+            }
+        })
+        .await;
+         Ok(())
+    // println!("Response: {}", hex::encode(&enc_response));
+    // let response_buf = ohttp_response.decapsulate(&enc_response)?;
+    // let response = Message::read_bhttp(&mut std::io::Cursor::new(&response_buf[..]))?;
+
+    // let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
+    //     Box::new(File::open(outfile)?)
+    // } else {
+    //     Box::new(std::io::stdout())
+    // };
+    // if args.binary {
+    //     response.write_bhttp(args.mode(), &mut output)?;
+    // } else {
+    //     response.write_http(&mut output)?;
+    // }
+    // Ok(())
+
+    // println!("Response: {}", hex::encode(&enc_response));
+    // let response_buf = ohttp_response.decapsulate(&enc_response)?;
+    // let response = Message::read_bhttp(&mut std::io::Cursor::new(&response_buf[..]))?;
+
+    // let mut output: Box<dyn io::Write> = if let Some(outfile) = &args.output {
+    //     Box::new(File::open(outfile)?)
+    // } else {
+    //     Box::new(std::io::stdout())
+    // };
+    // if args.binary {
+    //     response.write_bhttp(args.mode(), &mut output)?;
+    // } else {
+    //     response.write_http(&mut output)?;
+    // }
+    // Ok(())
 }

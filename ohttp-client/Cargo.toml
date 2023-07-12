@@ -16,6 +16,7 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"
 rustls = { version = "0.19", features = ["dangerous_configuration"]}
 structopt = "0.3"
 tokio = { version = "1", features = ["full"] }
+futures = "0.3.28"
 
 [dependencies.bhttp]
 path= "../bhttp"
